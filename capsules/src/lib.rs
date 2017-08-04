@@ -55,3 +55,4 @@ pub mod humidity;
 pub mod ieee802154;
 pub mod temperature;
 //pub mod nrf_internal_temp_sensor;
+pub mod bootloader;
