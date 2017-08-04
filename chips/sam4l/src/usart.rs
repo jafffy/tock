@@ -12,6 +12,7 @@ use kernel::ReturnCode;
 use kernel::hil;
 // local modules
 use pm;
+use gpio;
 
 // Register map for SAM4L USART
 #[repr(C)]
@@ -671,6 +672,10 @@ impl dma::DMAClient for USART {
                 // determine if it was an RX or TX transfer
                 if pid == self.rx_dma_peripheral {
                     // RX transfer was completed
+
+unsafe {
+                    gpio::PB[14].toggle();
+                }
 
                     // disable RX and RX interrupts
                     self.disable_rx_interrupts(usart);
