@@ -52,8 +52,6 @@ pub mod virtual_spi;
 pub mod net;
 pub mod aes_ccm;
 pub mod humidity;
-#[macro_use]
-pub mod net;
 pub mod ieee802154;
 pub mod temperature;
 //pub mod nrf_internal_temp_sensor;

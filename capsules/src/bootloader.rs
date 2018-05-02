@@ -58,25 +58,25 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 
 
 
-        // self.select_pin.enable();
-        self.select_pin.make_input();
+        // // self.select_pin.enable();
+        // self.select_pin.make_input();
 
 
 
-        // Check the select pin to see if we should enter bootloader mode.
-        let mut samples = 10000;
-        let mut active = 0;
-        let mut inactive = 0;
-        while samples > 0 {
-            if self.select_pin.read() == false {
-                active += 1;
-            } else {
-                inactive += 1;
-            }
-            samples -= 1;
-        }
+        // // Check the select pin to see if we should enter bootloader mode.
+        // let mut samples = 10000;
+        // let mut active = 0;
+        // let mut inactive = 0;
+        // while samples > 0 {
+        //     if self.select_pin.read() == false {
+        //         active += 1;
+        //     } else {
+        //         inactive += 1;
+        //     }
+        //     samples -= 1;
+        // }
 
-        if active > inactive {
+        // if active > inactive {
             // Looks like we do want bootloader mode.
 
 
@@ -85,15 +85,23 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 
             self.buffer.take().map(|buffer| {
                 self.dpin.toggle();
+                self.led.toggle();
                 self.uart.receive_automatic(buffer, 250);
+                // self.uart.receive(buffer, 5);
+                // buffer[0] = 97;
+                // buffer[1] = 98;
+                // buffer[2] = 100;
+                // buffer[3] = 105;
+                // buffer[4] = 110;
+                // self.uart.transmit(buffer, 5);
             });
 
 
 
 
-        } else {
-            // Jump to the kernel and start the real code.
-        }
+        // } else {
+        //     // Jump to the kernel and start the real code.
+        // }
 
 
     }
@@ -225,7 +233,7 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                         rx_len: usize,
                         _error: hil::uart::Error) {
 
-self.led.toggle();
+self.led.clear();
 self.dpin.toggle();
 
 

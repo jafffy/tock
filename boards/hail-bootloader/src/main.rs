@@ -2,11 +2,10 @@
 
 #![no_std]
 #![no_main]
-#![feature(asm,const_fn,drop_types_in_const,lang_items,compiler_builtins_lib)]
+#![feature(asm,const_fn,lang_items)]
 
 extern crate capsules;
 extern crate cortexm4;
-extern crate compiler_builtins;
 #[macro_use(static_init)]
 extern crate kernel;
 extern crate sam4l;
@@ -24,8 +23,7 @@ pub mod io;
 
 
 // No processes are supported.
-static mut PROCESSES: [Option<kernel::Process<'static>>; 1] = [None];
-
+static mut PROCESSES: [Option<&'static mut kernel::Process<'static>>; 1] = [None];
 
 struct HailBootloader {
     bootloader: &'static capsules::bootloader::Bootloader<'static, sam4l::usart::USART, sam4l::flashcalw::FLASHCALW, sam4l::gpio::GPIOPin>,
@@ -54,7 +52,8 @@ unsafe fn set_pin_primary_functions() {
     PA[05].configure(Some(A)); // A1 - ADC1
     PA[06].configure(Some(A)); // DAC
     PA[07].configure(None); //... WKP - Wakeup
-    PA[08].configure(None); //... Bootloader select pin.
+    // PA[08].configure(None); //... Bootloader select pin.
+    PA[08].configure(Some(A)); //... Bootloader select pin.
     PA[09].configure(None); //... ACC_INT1 - FXOS8700CQ Interrupt 1
     PA[10].configure(None); //... unused
     PA[11].configure(Some(A)); // FTDI_OUT - USART0 RX FTDI->SAM4L
@@ -153,9 +152,11 @@ pub unsafe fn reset_handler() {
     sam4l::gpio::PB[14].enable_output();
     sam4l::gpio::PB[14].clear();
 
-    hail.bootloader.initialize();
+
 
     let mut chip = sam4l::chip::Sam4l::new();
+
+    hail.bootloader.initialize();
 
     kernel::main(&hail, &mut chip, &mut PROCESSES, &hail.ipc);
 }

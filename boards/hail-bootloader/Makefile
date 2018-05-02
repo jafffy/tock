@@ -9,7 +9,11 @@ TOCKLOADER=tockloader
 
 TOCKLOADER_JTAG_FLAGS = --jtag --board hail --arch cortex-m4 --jtag-device ATSAM4LC8C
 
+.PHONY: program
+program: target/$(TARGET)/release/$(PLATFORM).bin
+	$(TOCKLOADER) $(TOCKLOADER_GENERAL_FLAGS) flash --address 0x10000 $<
+
 # upload kernel over JTAG
 .PHONY: flash
 flash: target/$(TARGET)/release/$(PLATFORM).bin
-	$(TOCKLOADER) flash --address 0 $(TOCKLOADER_JTAG_FLAGS) $<
+	$(TOCKLOADER) flash --address 0x10000 $(TOCKLOADER_JTAG_FLAGS) $<
