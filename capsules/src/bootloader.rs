@@ -15,14 +15,14 @@ const CMD_PING: u8 = 0x01;
 
 const RES_PONG: u8 = 0x11;
 
-pub struct Bootloader<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpio::Pin + 'a> {
+pub struct Bootloader<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'static, G: hil::gpio::Pin + 'a> {
     uart: &'a U,
     flash: &'a F,
     select_pin: &'a G,
     led: &'a G,
     dpin: &'a G,
     /// Buffer correctly sized for the underlying flash page size.
-    page_buffer: TakeCell<'a, F::Page>,
+    page_buffer: TakeCell<'static, F::Page>,
     // in_progress: Cell<Option<AppId>>,
     buffer: TakeCell<'static, [u8]>,
     // baud_rate: u32,
@@ -225,7 +225,9 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
         //     }
         // }
 
-        self.buffer.replace(buffer);
+        // self.buffer.replace(buffer);
+        self.uart.receive_automatic(buffer, 250);
+
     }
 
     fn receive_complete(&self,
@@ -233,27 +235,35 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                         rx_len: usize,
                         _error: hil::uart::Error) {
 
-self.led.clear();
+
 self.dpin.toggle();
 
+        // Check for escape character then the command byte.
+        if rx_len >= 2 && buffer[rx_len-2] == ESCAPE_CHAR && buffer[rx_len-1] != ESCAPE_CHAR {
+            // This looks like a valid command.
 
-        if rx_len >= 2 {
-            // Check for escape character then the command byte.
+            match buffer[rx_len-1] {
+                CMD_PING => {
+                    buffer[0] = ESCAPE_CHAR;
+                    buffer[1] = RES_PONG;
 
-            if buffer[rx_len-2] == ESCAPE_CHAR && buffer[rx_len-1] != ESCAPE_CHAR {
-                // This looks like a valid command.
+                    self.uart.transmit(buffer, 2);
+                }
 
-                match buffer[rx_len-1] {
-                    CMD_PING => {
-                        buffer[0] = ESCAPE_CHAR;
-                        buffer[1] = RES_PONG;
-
-                        self.uart.transmit(buffer, 2);
-                    }
-
-                    _ => {}
+                _ => {
+    self.led.clear();
+                    self.page_buffer.take().map(move |page| {
+                        for i in 0..rx_len {
+                            page.as_mut()[i] = buffer[i];
+                        }
+        // self.led.clear();
+                        // self.buffer.replace(buffer);
+                        self.uart.receive_automatic(buffer, 250);
+                        self.flash.write_page(384, page);
+                    });
                 }
             }
+
         }
     }
 }
@@ -264,7 +274,8 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
     }
 
     fn write_complete(&self, pagebuffer: &'static mut F::Page, _error: hil::flash::Error) {
-
+// self.led.toggle();
+        self.page_buffer.replace(pagebuffer);
     }
 
     fn erase_complete(&self, _error: hil::flash::Error) {}

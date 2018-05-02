@@ -114,6 +114,7 @@ pub unsafe fn reset_handler() {
 
     pub static mut PAGEBUFFER: sam4l::flashcalw::Sam4lPage = sam4l::flashcalw::Sam4lPage::new();
 
+    sam4l::flashcalw::FLASH_CONTROLLER.configure();
     let bootloader = static_init!(
         capsules::bootloader::Bootloader<'static, sam4l::usart::USART, sam4l::flashcalw::FLASHCALW, sam4l::gpio::GPIOPin>,
         capsules::bootloader::Bootloader::new(&sam4l::usart::USART0,
