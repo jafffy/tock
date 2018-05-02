@@ -2,9 +2,12 @@
 
 use core::cell::Cell;
 use core::cmp;
+// use core::Result;
 use kernel::common::take_cell::TakeCell;
 use kernel::hil;
 use kernel::process::Error;
+
+extern crate tockloader_proto;
 
 
 pub static mut BUF: [u8; 512] = [0; 512];
@@ -26,6 +29,8 @@ pub struct Bootloader<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash 
     // in_progress: Cell<Option<AppId>>,
     buffer: TakeCell<'static, [u8]>,
     // baud_rate: u32,
+    // response: TakeCell<'a, tockloader_proto::Response<'a>>,
+    pinged: Cell<bool>,
 }
 
 impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpio::Pin + 'a> Bootloader<'a, U, F, G> {
@@ -42,7 +47,8 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
             // in_progress: Cell::new(None),
             page_buffer: TakeCell::new(page_buffer),
             buffer: TakeCell::new(buffer),
-            // baud_rate: baud_rate,
+            // response: TakeCell::empty(),
+            pinged: Cell::new(false),
         }
     }
 
@@ -165,68 +171,31 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
     //         app.write_buffer = Some(slice);
     //     }
     // }
+
+    fn send_response (&self, response: tockloader_proto::Response<'a>) {
+        // self.response.map(|response| {
+
+            self.buffer.take().map(|buffer| {
+                let mut encoder = tockloader_proto::ResponseEncoder::new(&response).unwrap();
+                let mut i = 0;
+                while let Some(byte) = encoder.next() {
+                    // uart.putc(byte);
+                    buffer[i] = byte;
+                    i += 1;
+                }
+
+                self.uart.transmit(buffer, i);
+            });
+        // });
+    }
 }
 
 impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpio::Pin + 'a> hil::uart::Client for Bootloader<'a, U, F, G> {
     fn transmit_complete(&self, buffer: &'static mut [u8], _error: hil::uart::Error) {
-        // // Either print more from the AppSlice or send a callback to the
-        // // application.
-        // self.tx_buffer.replace(buffer);
-        // self.in_progress.get().map(|appid| {
-        //     self.in_progress.set(None);
-        //     self.apps.enter(appid, |app, _| {
-        //         match self.send_continue(appid, app) {
-        //             Ok(more_to_send) => {
-        //                 if !more_to_send {
-        //                     // Go ahead and signal the application
-        //                     let written = app.write_len;
-        //                     app.write_len = 0;
-        //                     app.write_callback.map(|mut cb| { cb.schedule(written, 0, 0); });
-        //                 }
-        //             }
-        //             Err(return_code) => {
-        //                 // XXX This shouldn't ever happen?
-        //                 app.write_len = 0;
-        //                 app.write_remaining = 0;
-        //                 app.pending_write = false;
-        //                 let r0 = isize::from(return_code) as usize;
-        //                 app.write_callback.map(|mut cb| { cb.schedule(r0, 0, 0); });
-        //             }
-        //         }
-        //     })
-        // });
-
-        // // If we are not printing more from the current AppSlice,
-        // // see if any other applications have pending messages.
-        // if self.in_progress.get().is_none() {
-        //     for cntr in self.apps.iter() {
-        //         let started_tx = cntr.enter(|app, _| {
-        //             if app.pending_write {
-        //                 app.pending_write = false;
-        //                 match self.send_continue(app.appid(), app) {
-        //                     Ok(more_to_send) => more_to_send,
-        //                     Err(return_code) => {
-        //                         // XXX This shouldn't ever happen?
-        //                         app.write_len = 0;
-        //                         app.write_remaining = 0;
-        //                         app.pending_write = false;
-        //                         let r0 = isize::from(return_code) as usize;
-        //                         app.write_callback.map(|mut cb| { cb.schedule(r0, 0, 0); });
-        //                         false
-        //                     }
-        //                 }
-        //             } else {
-        //                 false
-        //             }
-        //         });
-        //         if started_tx {
-        //             break;
-        //         }
-        //     }
-        // }
-
+// self.led.clear();
         // self.buffer.replace(buffer);
-        self.uart.receive_automatic(buffer, 250);
+        // self.uart.receive_automatic(buffer, 250);
+        self.uart.receive(buffer, 3);
 
     }
 
@@ -236,35 +205,128 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                         _error: hil::uart::Error) {
 
 
-self.dpin.toggle();
+        if self.pinged.get() == true {
+            // self.led.clear();
+        }
 
-        // Check for escape character then the command byte.
-        if rx_len >= 2 && buffer[rx_len-2] == ESCAPE_CHAR && buffer[rx_len-1] != ESCAPE_CHAR {
-            // This looks like a valid command.
 
-            match buffer[rx_len-1] {
-                CMD_PING => {
-                    buffer[0] = ESCAPE_CHAR;
-                    buffer[1] = RES_PONG;
+        let mut decoder = tockloader_proto::CommandDecoder::new();
 
-                    self.uart.transmit(buffer, 2);
+        // decoder.read(buffers.slice(rx_len), )
+
+
+        // loop {
+        // if let Ok(Some(ch)) = uart.getc_try() {
+        // let mut response = None;
+        // let mut command: Result<Option<tockloader_proto::Command<'_>>, tockloader_proto::Error>;
+        let mut need_reset = false;
+        for i in 0..rx_len {
+
+            // response = match decoder.receive(buffer[i]) {
+            match decoder.receive(buffer[i]) {
+                Ok(None) => {},
+                Ok(Some(tockloader_proto::Command::Ping)) => {
+
+                    self.buffer.replace(buffer);
+                    self.send_response(tockloader_proto::Response::Pong);
+                    break;
                 }
-
-                _ => {
+                Ok(Some(tockloader_proto::Command::Reset)) => {
+                    need_reset = true;
+                    // decoder.reset();
+    // self.led.clear();
+                    // self.uart.receive_automatic(buffer, 250);
+                    self.uart.receive(buffer, 3);
+                    break;
+                },
+                Ok(Some(tockloader_proto::Command::GetAttr{index})) => {
+                    // Some(tockloader_proto::Response::Unknown)
     self.led.clear();
-                    self.page_buffer.take().map(move |page| {
-                        for i in 0..rx_len {
-                            page.as_mut()[i] = buffer[i];
-                        }
-        // self.led.clear();
-                        // self.buffer.replace(buffer);
-                        self.uart.receive_automatic(buffer, 250);
-                        self.flash.write_page(384, page);
-                    });
+                    break;
                 }
-            }
+                Ok(Some(_)) => {
+                    self.send_response(tockloader_proto::Response::Unknown);
+                    // Some(tockloader_proto::Response::Unknown)
+    // self.led.clear();
+                    break;
+                }
+                Err(_) => {
+                    self.send_response(tockloader_proto::Response::InternalError);
+
+                    // Some(tockloader_proto::Response::InternalError)
+                    break;
+                }
+            };
+
 
         }
+        if need_reset {
+            // self.led.clear();
+            self.pinged.set(true);
+            decoder.reset();
+
+        }
+
+        // let response = match command {
+        //     Ok(None) => None,
+        //     Ok(Some(tockloader_proto::Command::Ping)) => Some(tockloader_proto::Response::Pong),
+        //     Ok(Some(tockloader_proto::Command::Reset)) => {
+        //         // need_reset = true;
+        //         None
+        //     },
+        //     Ok(Some(tockloader_proto::Command::GetAttr{index})) => Some(tockloader_proto::Response::Unknown),
+        //     Ok(Some(_)) => Some(tockloader_proto::Response::Unknown),
+        //     Err(_) => Some(tockloader_proto::Response::InternalError),
+        // };
+
+//         if let Some(response) = response {
+// self.led.toggle();
+//             let mut encoder = tockloader_proto::ResponseEncoder::new(&response).unwrap();
+//             let mut i = 0;
+//             while let Some(byte) = encoder.next() {
+//                 // uart.putc(byte);
+//                 buffer[i] = byte;
+//                 i += 1;
+//             }
+
+//             self.uart.transmit(buffer, i);
+//         }
+
+        // }
+
+
+
+
+
+// self.dpin.toggle();
+
+//         // Check for escape character then the command byte.
+//         if rx_len >= 2 && buffer[rx_len-2] == ESCAPE_CHAR && buffer[rx_len-1] != ESCAPE_CHAR {
+//             // This looks like a valid command.
+
+//             match buffer[rx_len-1] {
+//                 CMD_PING => {
+//                     buffer[0] = ESCAPE_CHAR;
+//                     buffer[1] = RES_PONG;
+
+//                     self.uart.transmit(buffer, 2);
+//                 }
+
+//                 _ => {
+//     self.led.clear();
+//                     self.page_buffer.take().map(move |page| {
+//                         for i in 0..rx_len {
+//                             page.as_mut()[i] = buffer[i];
+//                         }
+//         // self.led.clear();
+//                         // self.buffer.replace(buffer);
+//                         self.uart.receive_automatic(buffer, 250);
+//                         self.flash.write_page(384, page);
+//                     });
+//                 }
+//             }
+
+//         }
     }
 }
 
