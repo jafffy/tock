@@ -19,11 +19,13 @@ const ESCAPE_CHAR: u8 = 0xFC;
 const CMD_PING: u8 = 0x01;
 
 const RES_PONG: u8 = 0x11;
+const RES_GET_ATTR: u8 = 0x22;
 
 #[derive(Copy, Clone, PartialEq)]
 enum state {
     Idle,
     GetAttribute{index: u8},
+    ReadRange{address: u32, length: u16, remaining_length: u16},
 }
 
 pub struct Bootloader<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'static, G: hil::gpio::Pin + 'a> {
@@ -284,6 +286,24 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                     self.buffer.replace(buffer);
                     break;
                 },
+                Ok(Some(tockloader_proto::Command::ReadRange{address, length})) => {
+                    // self.state.set(State::Read);
+                    // self.buffer.replace(buffer);
+                    // self.address.set(address);
+                    // self.length.set(length);
+                    // self.remaining_length.set(length);
+                    // self.buffer_index.set(0);
+                    // self.driver.read_page(address / page_size, pagebuffer)
+
+
+                    self.state.set(state::ReadRange{address, length, remaining_length: length});
+                    self.buffer.replace(buffer);
+                    self.page_buffer.take().map(move |page| {
+                        let page_size = page.as_mut().len();
+                        self.flash.read_page(address as usize / page_size, page);
+                    });
+                    break;
+                }
                 Ok(Some(tockloader_proto::Command::GetAttr{index})) => {
                     // Some(tockloader_proto::Response::Unknown)
     // self.led.clear();
@@ -393,12 +413,24 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 self.led.clear();
 
         match self.state.get() {
+
+            // We just read the correct page for this attribute. Copy it to
+            // the out buffer and send it back to the client.
             state::GetAttribute{index} => {
+                self.state.set(state::Idle);
                 self.buffer.take().map(move |buffer| {
-                    buffer[0] = 0xfc;
-                    buffer[1] = 0x22;
+                    buffer[0] = ESCAPE_CHAR;
+                    buffer[1] = RES_GET_ATTR;
+                    let mut j = 2;
                     for i in 0..64 {
-                        buffer[2+i] = pagebuffer.as_mut()[(((index as usize)%8)*64) + i];
+                        let b = pagebuffer.as_mut()[(((index as usize)%8)*64) + i];
+                        if b == ESCAPE_CHAR {
+                            // Need to escape the escape character.
+                            buffer[j] = ESCAPE_CHAR;
+                            j += 1;
+                        }
+                        buffer[j] = b;
+                        j += 1;
                     }
 
                     self.page_buffer.replace(pagebuffer);
@@ -411,15 +443,6 @@ self.led.clear();
 
 
 
-        // self.buffer2.take().map(|key_buffer| {
-        //     for i in 0..8 {
-        //         key_buffer[i] = pagebuffer.as_mut()[i];
-        //     }
-
-        //     self.buffer3.take().map(|value_buffer| {
-
-        //     })
-        // });
 
     }
 
