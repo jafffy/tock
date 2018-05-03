@@ -313,24 +313,24 @@ impl<'a> USARTRegManager<'a> {
 
 impl<'a> Drop for USARTRegManager<'a> {
     fn drop(&mut self) {
-        // // Anything listening for RX or TX interrupts?
-        // let ints_active = self.registers.imr.matches_any(
-        //     Interrupt::RXBUFF::SET + Interrupt::TXEMPTY::SET + Interrupt::TIMEOUT::SET
-        //         + Interrupt::PARE::SET + Interrupt::FRAME::SET + Interrupt::OVRE::SET
-        //         + Interrupt::TXRDY::SET + Interrupt::RXRDY::SET,
-        // );
+        // Anything listening for RX or TX interrupts?
+        let ints_active = self.registers.imr.matches_any(
+            Interrupt::RXBUFF::SET + Interrupt::TXEMPTY::SET + Interrupt::TIMEOUT::SET
+                + Interrupt::PARE::SET + Interrupt::FRAME::SET + Interrupt::OVRE::SET
+                + Interrupt::TXRDY::SET + Interrupt::RXRDY::SET,
+        );
 
-        // let rx_active = self.rx_dma.map_or(false, |rx_dma| rx_dma.is_enabled());
-        // let tx_active = self.tx_dma.map_or(false, |tx_dma| tx_dma.is_enabled());
+        let rx_active = self.rx_dma.map_or(false, |rx_dma| rx_dma.is_enabled());
+        let tx_active = self.tx_dma.map_or(false, |tx_dma| tx_dma.is_enabled());
 
-        // // Special-case panic here as panic does not actually use the
-        // // USART driver code in this file, rather it writes the registers
-        // // directly and we can't safely reason about what the custom panic
-        // // USART driver is doing / expects.
-        // let is_panic = IS_PANICING.load(Ordering::Relaxed);
-        // if !(rx_active || tx_active || ints_active || is_panic) {
-        //     pm::disable_clock(self.clock);
-        // }
+        // Special-case panic here as panic does not actually use the
+        // USART driver code in this file, rather it writes the registers
+        // directly and we can't safely reason about what the custom panic
+        // USART driver is doing / expects.
+        let is_panic = IS_PANICING.load(Ordering::Relaxed);
+        if !(rx_active || tx_active || ints_active || is_panic) {
+            pm::disable_clock(self.clock);
+        }
     }
 }
 
@@ -690,10 +690,6 @@ impl dma::DMAClient for USART {
                 if pid == self.rx_dma_peripheral {
                     // RX transfer was completed
 
-unsafe {
-                    gpio::PB[14].toggle();
-                }
-
                     // disable RX and RX interrupts
                     self.disable_rx_interrupts(usart);
                     self.disable_rx(usart);
@@ -730,23 +726,6 @@ unsafe {
                     // there may still be bytes left in the TX buffer.
                     self.usart_tx_state.set(USARTStateTX::Transfer_Completing);
                     self.enable_tx_empty_interrupt(usart);
-
-                    // // get buffer
-                    // let buffer = self.tx_dma.get().map_or(None, |tx_dma| {
-                    //     let buf = tx_dma.abort_xfer();
-                    //     tx_dma.disable();
-                    //     buf
-                    // });
-
-                    // // alert client
-                    // self.client.get().map(|usartclient| {
-                    //     buffer.map(|buf| match usartclient {
-                    //         UsartClient::Uart(client) => {
-                    //             client.transmit_complete(buf, hil::uart::Error::CommandComplete);
-                    //         }
-                    //         UsartClient::SpiMaster(_) => {}
-                    //     });
-                    // });
                     self.tx_len.set(0);
                 }
             }

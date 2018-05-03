@@ -246,8 +246,8 @@ impl DMAChannel {
             unsafe {
                 let num_enabled = intrinsics::atomic_xsub(&mut NUM_ENABLED, 1);
                 if num_enabled == 1 {
-                    // pm::disable_clock(pm::Clock::HSB(pm::HSBClock::PDCA));
-                    // pm::disable_clock(pm::Clock::PBB(pm::PBBClock::PDCA));
+                    pm::disable_clock(pm::Clock::HSB(pm::HSBClock::PDCA));
+                    pm::disable_clock(pm::Clock::PBB(pm::PBBClock::PDCA));
                 }
             }
             let registers: &DMARegisters = unsafe { &*self.registers };
