@@ -52,8 +52,8 @@ unsafe fn set_pin_primary_functions() {
     PA[05].configure(Some(A)); // A1 - ADC1
     PA[06].configure(Some(A)); // DAC
     PA[07].configure(None); //... WKP - Wakeup
-    // PA[08].configure(None); //... Bootloader select pin.
-    PA[08].configure(Some(A)); //... Bootloader select pin.
+    PA[08].configure(None); //... Bootloader select pin.
+    // PA[08].configure(Some(A)); //... Bootloader select pin.
     PA[09].configure(None); //... ACC_INT1 - FXOS8700CQ Interrupt 1
     PA[10].configure(None); //... unused
     PA[11].configure(Some(A)); // FTDI_OUT - USART0 RX FTDI->SAM4L
@@ -123,7 +123,9 @@ pub unsafe fn reset_handler() {
             &sam4l::gpio::PA[13],
             &sam4l::gpio::PB[14],
                      &mut PAGEBUFFER,
-                     &mut capsules::bootloader::BUF));
+                     &mut capsules::bootloader::BUF,
+                     &mut capsules::bootloader::BUF2,
+                     &mut capsules::bootloader::BUF3));
     hil::uart::UART::set_client(&sam4l::usart::USART0, bootloader);
     hil::flash::HasClient::set_client(&sam4l::flashcalw::FLASH_CONTROLLER, bootloader);
 

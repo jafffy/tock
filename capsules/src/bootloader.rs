@@ -11,12 +11,20 @@ extern crate tockloader_proto;
 
 
 pub static mut BUF: [u8; 512] = [0; 512];
+pub static mut BUF2: [u8; 128] = [0; 128];
+pub static mut BUF3: [u8; 128] = [0; 128];
 
 
 const ESCAPE_CHAR: u8 = 0xFC;
 const CMD_PING: u8 = 0x01;
 
 const RES_PONG: u8 = 0x11;
+
+#[derive(Copy, Clone, PartialEq)]
+enum state {
+    Idle,
+    GetAttribute{index: u8},
+}
 
 pub struct Bootloader<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'static, G: hil::gpio::Pin + 'a> {
     uart: &'a U,
@@ -28,15 +36,20 @@ pub struct Bootloader<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash 
     page_buffer: TakeCell<'static, F::Page>,
     // in_progress: Cell<Option<AppId>>,
     buffer: TakeCell<'static, [u8]>,
+    buffer2: TakeCell<'static, [u8]>,
+    buffer3: TakeCell<'static, [u8]>,
     // baud_rate: u32,
     // response: TakeCell<'a, tockloader_proto::Response<'a>>,
     pinged: Cell<bool>,
+    state: Cell<state>,
 }
 
 impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpio::Pin + 'a> Bootloader<'a, U, F, G> {
     pub fn new(uart: &'a U, flash: &'a F, select_pin: &'a G, led: &'a G, dpin: &'a G,
                page_buffer: &'static mut F::Page,
-               buffer: &'static mut [u8])
+               buffer: &'static mut [u8],
+               buffer2: &'static mut [u8],
+               buffer3: &'static mut [u8])
                -> Bootloader<'a, U, F, G> {
         Bootloader {
             uart: uart,
@@ -47,8 +60,11 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
             // in_progress: Cell::new(None),
             page_buffer: TakeCell::new(page_buffer),
             buffer: TakeCell::new(buffer),
+            buffer2: TakeCell::new(buffer2),
+            buffer3: TakeCell::new(buffer3),
             // response: TakeCell::empty(),
             pinged: Cell::new(false),
+            state: Cell::new(state::Idle),
         }
     }
 
@@ -93,7 +109,7 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                 self.dpin.toggle();
                 self.led.toggle();
                 self.uart.receive_automatic(buffer, 250);
-                // self.uart.receive(buffer, 5);
+                // self.uart.receive(buffer, 2);
                 // buffer[0] = 97;
                 // buffer[1] = 98;
                 // buffer[2] = 100;
@@ -191,23 +207,45 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 }
 
 impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpio::Pin + 'a> hil::uart::Client for Bootloader<'a, U, F, G> {
-    fn transmit_complete(&self, buffer: &'static mut [u8], _error: hil::uart::Error) {
+    fn transmit_complete(&self, buffer: &'static mut [u8], error: hil::uart::Error) {
+        if error != hil::uart::Error::CommandComplete {
+            self.led.clear();
+        } else {
 // self.led.clear();
-        // self.buffer.replace(buffer);
-        // self.uart.receive_automatic(buffer, 250);
-        self.uart.receive(buffer, 3);
+            // self.buffer.replace(buffer);
+            self.uart.receive_automatic(buffer, 250);
+            // self.uart.receive(buffer, 3);
+        }
 
     }
 
     fn receive_complete(&self,
                         buffer: &'static mut [u8],
                         rx_len: usize,
-                        _error: hil::uart::Error) {
+                        error: hil::uart::Error) {
 
 
-        if self.pinged.get() == true {
-            // self.led.clear();
+        if error != hil::uart::Error::CommandComplete {
+            self.led.clear();
+            return
         }
+
+
+    //     if self.pinged.get() == true {
+    //         self.led.clear();
+
+    //             self.page_buffer.take().map(move |page| {
+    //                 page.as_mut()[0] = 0xa1;
+    //                 for i in 0..rx_len {
+    //                     page.as_mut()[i+1] = buffer[i];
+    //                 }
+    // // self.led.clear();
+    //                 // self.buffer.replace(buffer);
+    //                 // self.uart.receive_automatic(buffer, 250);
+    //                 self.flash.write_page(384, page);
+    //             });
+    //             return;
+    //     }
 
 
         let mut decoder = tockloader_proto::CommandDecoder::new();
@@ -221,6 +259,12 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
         // let mut command: Result<Option<tockloader_proto::Command<'_>>, tockloader_proto::Error>;
         let mut need_reset = false;
         for i in 0..rx_len {
+
+            // if self.pinged.get() == true {
+            //     if buffer[i] == 0xfc {
+            //         self.led.clear();
+            //     }
+            // }
 
             // response = match decoder.receive(buffer[i]) {
             match decoder.receive(buffer[i]) {
@@ -236,23 +280,29 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                     // decoder.reset();
     // self.led.clear();
                     // self.uart.receive_automatic(buffer, 250);
-                    self.uart.receive(buffer, 3);
+
+                    self.buffer.replace(buffer);
                     break;
                 },
                 Ok(Some(tockloader_proto::Command::GetAttr{index})) => {
                     // Some(tockloader_proto::Response::Unknown)
-    self.led.clear();
+    // self.led.clear();
+                    self.state.set(state::GetAttribute{index: index});
+                    self.buffer.replace(buffer);
+                    self.page_buffer.take().map(move |page| {
+                        self.flash.read_page(3 + (index as usize / 8), page);
+                    });
                     break;
                 }
                 Ok(Some(_)) => {
                     self.send_response(tockloader_proto::Response::Unknown);
                     // Some(tockloader_proto::Response::Unknown)
-    // self.led.clear();
+// self.led.clear();
                     break;
                 }
                 Err(_) => {
                     self.send_response(tockloader_proto::Response::InternalError);
-
+// self.led.clear();
                     // Some(tockloader_proto::Response::InternalError)
                     break;
                 }
@@ -260,12 +310,20 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 
 
         }
+
         if need_reset {
             // self.led.clear();
             self.pinged.set(true);
             decoder.reset();
 
+            self.buffer.take().map(|buffer| {
+                // self.uart.receive(buffer, 3);
+                self.uart.receive_automatic(buffer, 250);
+            });
+
         }
+
+
 
         // let response = match command {
         //     Ok(None) => None,
@@ -332,6 +390,36 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 
 impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpio::Pin + 'a> hil::flash::Client<F> for Bootloader<'a, U, F, G> {
     fn read_complete(&self, pagebuffer: &'static mut F::Page, _error: hil::flash::Error) {
+self.led.clear();
+
+        match self.state.get() {
+            state::GetAttribute{index} => {
+                self.buffer.take().map(move |buffer| {
+                    buffer[0] = 0xfc;
+                    buffer[1] = 0x22;
+                    for i in 0..64 {
+                        buffer[2+i] = pagebuffer.as_mut()[(((index as usize)%8)*64) + i];
+                    }
+
+                    self.page_buffer.replace(pagebuffer);
+                    self.uart.transmit(buffer, 66);
+                });
+            }
+
+            _ => {}
+        }
+
+
+
+        // self.buffer2.take().map(|key_buffer| {
+        //     for i in 0..8 {
+        //         key_buffer[i] = pagebuffer.as_mut()[i];
+        //     }
+
+        //     self.buffer3.take().map(|value_buffer| {
+
+        //     })
+        // });
 
     }
 
