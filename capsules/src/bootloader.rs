@@ -19,6 +19,7 @@ const ESCAPE_CHAR: u8 = 0xFC;
 const CMD_PING: u8 = 0x01;
 
 const RES_PONG: u8 = 0x11;
+const RES_READ_RANGE: u8 = 0x20;
 const RES_GET_ATTR: u8 = 0x22;
 
 #[derive(Copy, Clone, PartialEq)]
@@ -130,65 +131,7 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 
     }
 
-    // /// Internal helper function for setting up a new send transaction
-    // fn send_new(&self, app_id: AppId, app: &mut App, len: usize) -> ReturnCode {
-    //     match app.write_buffer.take() {
-    //         Some(slice) => {
-    //             app.write_len = cmp::min(len, slice.len());
-    //             app.write_remaining = app.write_len;
-    //             self.send(app_id, app, slice);
-    //             ReturnCode::SUCCESS
-    //         }
-    //         None => ReturnCode::EBUSY,
-    //     }
-    // }
 
-    // /// Internal helper function for continuing a previously set up transaction
-    // /// Returns true if this send is still active, or false if it has completed
-    // fn send_continue(&self, app_id: AppId, app: &mut App) -> Result<bool, ReturnCode> {
-    //     if app.write_remaining > 0 {
-    //         app.write_buffer.take().map_or(Err(ReturnCode::ERESERVE), |slice| {
-    //             self.send(app_id, app, slice);
-    //             Ok(true)
-    //         })
-    //     } else {
-    //         Ok(false)
-    //     }
-    // }
-
-    // /// Internal helper function for sending data for an existing transaction.
-    // /// Cannot fail. If can't send now, it will schedule for sending later.
-    // fn send(&self, app_id: AppId, app: &mut App, slice: AppSlice<Shared, u8>) {
-    //     if self.in_progress.get().is_none() {
-    //         self.in_progress.set(Some(app_id));
-    //         self.tx_buffer.take().map(|buffer| {
-    //             let mut transaction_len = app.write_remaining;
-    //             for (i, c) in slice.as_ref()[slice.len() - app.write_remaining..slice.len()]
-    //                 .iter()
-    //                 .enumerate() {
-    //                 if buffer.len() <= i {
-    //                     break;
-    //                 }
-    //                 buffer[i] = *c;
-    //             }
-
-    //             // Check if everything we wanted to print
-    //             // fit in the buffer.
-    //             if app.write_remaining > buffer.len() {
-    //                 transaction_len = buffer.len();
-    //                 app.write_remaining -= buffer.len();
-    //                 app.write_buffer = Some(slice);
-    //             } else {
-    //                 app.write_remaining = 0;
-    //             }
-
-    //             self.uart.transmit(buffer, transaction_len);
-    //         });
-    //     } else {
-    //         app.pending_write = true;
-    //         app.write_buffer = Some(slice);
-    //     }
-    // }
 
     fn send_response (&self, response: tockloader_proto::Response<'a>) {
         // self.response.map(|response| {
@@ -211,12 +154,39 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpio::Pin + 'a> hil::uart::Client for Bootloader<'a, U, F, G> {
     fn transmit_complete(&self, buffer: &'static mut [u8], error: hil::uart::Error) {
         if error != hil::uart::Error::CommandComplete {
-            self.led.clear();
+            // self.led.clear();
         } else {
 // self.led.clear();
             // self.buffer.replace(buffer);
-            self.uart.receive_automatic(buffer, 250);
+
             // self.uart.receive(buffer, 3);
+            //
+            //
+
+
+            match self.state.get() {
+                state::ReadRange{address, length, remaining_length} => {
+    self.led.clear();
+                    // We have sent some of the read range to the client.
+                    // We are either done, or need to setup the next read.
+                    if remaining_length == 0 {
+                        self.state.set(state::Idle);
+                        self.uart.receive_automatic(buffer, 250);
+
+                    } else {
+
+                        self.buffer.replace(buffer);
+                        self.page_buffer.take().map(move |page| {
+                            let page_size = page.as_mut().len();
+                            self.flash.read_page(address as usize / page_size, page);
+                        });
+                    }
+                }
+
+                _ => {
+                    self.uart.receive_automatic(buffer, 250);
+                }
+            }
         }
 
     }
@@ -228,7 +198,7 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 
 
         if error != hil::uart::Error::CommandComplete {
-            self.led.clear();
+            // self.led.clear();
             return
         }
 
@@ -410,7 +380,7 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 
 impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpio::Pin + 'a> hil::flash::Client<F> for Bootloader<'a, U, F, G> {
     fn read_complete(&self, pagebuffer: &'static mut F::Page, _error: hil::flash::Error) {
-self.led.clear();
+
 
         match self.state.get() {
 
@@ -435,6 +405,72 @@ self.led.clear();
 
                     self.page_buffer.replace(pagebuffer);
                     self.uart.transmit(buffer, 66);
+                });
+            }
+
+            state::ReadRange{address, length, remaining_length} => {
+                // Take what we need to read out of this page and send it
+                // on uart. If this is the first message be sure to send the
+                // header.
+                self.buffer.take().map(move |buffer| {
+                    let mut index = 0;
+                    if length == remaining_length {
+                        buffer[0] = ESCAPE_CHAR;
+                        buffer[1] = RES_READ_RANGE;
+                        index = 2;
+                    }
+
+                    let page_size = pagebuffer.as_mut().len();
+                    // This will get us our offset into the page.
+                    let page_index = address as usize % page_size;
+                    // Length is either the rest of the page or how much we have left.
+                    let len = cmp::min(page_size - page_index, remaining_length as usize);
+                    // Make sure we don't overflow the buffer.
+                    let copy_len = cmp::min(len, buffer.len()-index);
+
+                    // Copy what we read from the page buffer to the user buffer.
+                    // for i in 0..copy_len {
+                    //     buffer[index + i] =
+                    // }
+                    // Keep track of how much was actually copied.
+                    let mut actually_copied = 0;
+                    for i in 0..copy_len {
+                        // Make sure we don't overflow the buffer. We need to
+                        // have at least two open bytes in the buffer
+                        if index >= (buffer.len() - 1) {
+                            break;
+                        }
+
+                        // Normally do the copy and check if this needs to be
+                        // escaped.
+                        actually_copied += 1;
+                        let b = pagebuffer.as_mut()[page_index + i];
+                        if b == ESCAPE_CHAR {
+                            // Need to escape the escape character.
+                            buffer[index] = ESCAPE_CHAR;
+                            index += 1;
+                        }
+                        buffer[index] = b;
+                        index += 1;
+
+
+                    }
+
+                    // Update our state.
+                    let new_address = address as usize + actually_copied;
+                    let new_remaining_length = remaining_length as usize - actually_copied;
+                    self.state.set(state::ReadRange{address: new_address as u32, length, remaining_length: new_remaining_length as u16});
+
+                    // And send the buffer to the client.
+                    self.page_buffer.replace(pagebuffer);
+                    self.uart.transmit(buffer, index);
+
+                    // // Do the write.
+                    // self.buffer.replace(buffer);
+                    // self.remaining_length.set(self.remaining_length.get() - len);
+                    // self.address.set(self.address.get() + len);
+                    // self.buffer_index.set(buffer_index + len);
+                    // self.driver.write_page(page_number, pagebuffer);
                 });
             }
 
