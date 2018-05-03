@@ -10,13 +10,9 @@ extern crate cortexm4;
 extern crate kernel;
 extern crate sam4l;
 
-use capsules::console::{self, Console};
-use capsules::virtual_alarm::{MuxAlarm, VirtualMuxAlarm};
 use kernel::Platform;
 use kernel::hil;
 use kernel::hil::Controller;
-use kernel::hil::spi::SpiMaster;
-use sam4l::usart;
 
 #[macro_use]
 pub mod io;
@@ -123,9 +119,7 @@ pub unsafe fn reset_handler() {
             &sam4l::gpio::PA[13],
             &sam4l::gpio::PB[14],
                      &mut PAGEBUFFER,
-                     &mut capsules::bootloader::BUF,
-                     &mut capsules::bootloader::BUF2,
-                     &mut capsules::bootloader::BUF3));
+                     &mut capsules::bootloader::BUF));
     hil::uart::UART::set_client(&sam4l::usart::USART0, bootloader);
     hil::flash::HasClient::set_client(&sam4l::flashcalw::FLASH_CONTROLLER, bootloader);
 

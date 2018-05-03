@@ -2,23 +2,19 @@
 
 use core::cell::Cell;
 use core::cmp;
-// use core::Result;
 use kernel::common::take_cell::TakeCell;
 use kernel::hil;
-use kernel::process::Error;
 
 extern crate tockloader_proto;
 
 
 pub static mut BUF: [u8; 512] = [0; 512];
-pub static mut BUF2: [u8; 128] = [0; 128];
-pub static mut BUF3: [u8; 128] = [0; 128];
+// pub static mut BUF2: [u8; 128] = [0; 128];
+// pub static mut BUF3: [u8; 128] = [0; 128];
 
 
 const ESCAPE_CHAR: u8 = 0xFC;
-const CMD_PING: u8 = 0x01;
 
-const RES_PONG: u8 = 0x11;
 const RES_OK: u8 = 0x15;
 const RES_READ_RANGE: u8 = 0x20;
 const RES_GET_ATTR: u8 = 0x22;
@@ -26,6 +22,7 @@ const RES_GET_ATTR: u8 = 0x22;
 #[derive(Copy, Clone, PartialEq)]
 enum state {
     Idle,
+    ErasePage,
     GetAttribute{index: u8},
     SetAttribute{index: u8},
     ReadRange{address: u32, length: u16, remaining_length: u16},
@@ -41,8 +38,8 @@ pub struct Bootloader<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash 
     page_buffer: TakeCell<'static, F::Page>,
     // in_progress: Cell<Option<AppId>>,
     buffer: TakeCell<'static, [u8]>,
-    buffer2: TakeCell<'static, [u8]>,
-    buffer3: TakeCell<'static, [u8]>,
+    // buffer2: TakeCell<'static, [u8]>,
+    // buffer3: TakeCell<'static, [u8]>,
     // baud_rate: u32,
     // response: TakeCell<'a, tockloader_proto::Response<'a>>,
     pinged: Cell<bool>,
@@ -52,9 +49,9 @@ pub struct Bootloader<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash 
 impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpio::Pin + 'a> Bootloader<'a, U, F, G> {
     pub fn new(uart: &'a U, flash: &'a F, select_pin: &'a G, led: &'a G, dpin: &'a G,
                page_buffer: &'static mut F::Page,
-               buffer: &'static mut [u8],
-               buffer2: &'static mut [u8],
-               buffer3: &'static mut [u8])
+               buffer: &'static mut [u8])
+               // buffer2: &'static mut [u8],
+               // buffer3: &'static mut [u8])
                -> Bootloader<'a, U, F, G> {
         Bootloader {
             uart: uart,
@@ -65,8 +62,8 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
             // in_progress: Cell::new(None),
             page_buffer: TakeCell::new(page_buffer),
             buffer: TakeCell::new(buffer),
-            buffer2: TakeCell::new(buffer2),
-            buffer3: TakeCell::new(buffer3),
+            // buffer2: TakeCell::new(buffer2),
+            // buffer3: TakeCell::new(buffer3),
             // response: TakeCell::empty(),
             pinged: Cell::new(false),
             state: Cell::new(state::Idle),
@@ -158,16 +155,12 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
         if error != hil::uart::Error::CommandComplete {
             // self.led.clear();
         } else {
-// self.led.clear();
-            // self.buffer.replace(buffer);
-
-            // self.uart.receive(buffer, 3);
-            //
-            //
-
 
             match self.state.get() {
-                state::ReadRange{address, length, remaining_length} => {
+
+                // Check if there is more to be read, and if so, read it and
+                // send it.
+                state::ReadRange{address, length: _, remaining_length} => {
                     // We have sent some of the read range to the client.
                     // We are either done, or need to setup the next read.
                     if remaining_length == 0 {
@@ -175,7 +168,6 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                         self.uart.receive_automatic(buffer, 250);
 
                     } else {
-
                         self.buffer.replace(buffer);
                         self.page_buffer.take().map(move |page| {
                             let page_size = page.as_mut().len();
@@ -250,23 +242,10 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                 }
                 Ok(Some(tockloader_proto::Command::Reset)) => {
                     need_reset = true;
-                    // decoder.reset();
-    // self.led.clear();
-                    // self.uart.receive_automatic(buffer, 250);
-
                     self.buffer.replace(buffer);
                     break;
-                },
+                }
                 Ok(Some(tockloader_proto::Command::ReadRange{address, length})) => {
-                    // self.state.set(State::Read);
-                    // self.buffer.replace(buffer);
-                    // self.address.set(address);
-                    // self.length.set(length);
-                    // self.remaining_length.set(length);
-                    // self.buffer_index.set(0);
-                    // self.driver.read_page(address / page_size, pagebuffer)
-
-
                     self.state.set(state::ReadRange{address, length, remaining_length: length});
                     self.buffer.replace(buffer);
                     self.page_buffer.take().map(move |page| {
@@ -275,9 +254,14 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                     });
                     break;
                 }
+                Ok(Some(tockloader_proto::Command::ErasePage{address})) => {
+                    self.state.set(state::ErasePage);
+                    self.buffer.replace(buffer);
+                    let page_size = self.page_buffer.map_or(512, |page| { page.as_mut().len() });
+                    self.flash.erase_page(address as usize / page_size);
+                    break;
+                }
                 Ok(Some(tockloader_proto::Command::GetAttr{index})) => {
-                    // Some(tockloader_proto::Response::Unknown)
-    // self.led.clear();
                     self.state.set(state::GetAttribute{index: index});
                     self.buffer.replace(buffer);
                     self.page_buffer.take().map(move |page| {
@@ -339,69 +323,6 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
             });
 
         }
-
-
-
-        // let response = match command {
-        //     Ok(None) => None,
-        //     Ok(Some(tockloader_proto::Command::Ping)) => Some(tockloader_proto::Response::Pong),
-        //     Ok(Some(tockloader_proto::Command::Reset)) => {
-        //         // need_reset = true;
-        //         None
-        //     },
-        //     Ok(Some(tockloader_proto::Command::GetAttr{index})) => Some(tockloader_proto::Response::Unknown),
-        //     Ok(Some(_)) => Some(tockloader_proto::Response::Unknown),
-        //     Err(_) => Some(tockloader_proto::Response::InternalError),
-        // };
-
-//         if let Some(response) = response {
-// self.led.toggle();
-//             let mut encoder = tockloader_proto::ResponseEncoder::new(&response).unwrap();
-//             let mut i = 0;
-//             while let Some(byte) = encoder.next() {
-//                 // uart.putc(byte);
-//                 buffer[i] = byte;
-//                 i += 1;
-//             }
-
-//             self.uart.transmit(buffer, i);
-//         }
-
-        // }
-
-
-
-
-
-// self.dpin.toggle();
-
-//         // Check for escape character then the command byte.
-//         if rx_len >= 2 && buffer[rx_len-2] == ESCAPE_CHAR && buffer[rx_len-1] != ESCAPE_CHAR {
-//             // This looks like a valid command.
-
-//             match buffer[rx_len-1] {
-//                 CMD_PING => {
-//                     buffer[0] = ESCAPE_CHAR;
-//                     buffer[1] = RES_PONG;
-
-//                     self.uart.transmit(buffer, 2);
-//                 }
-
-//                 _ => {
-//     self.led.clear();
-//                     self.page_buffer.take().map(move |page| {
-//                         for i in 0..rx_len {
-//                             page.as_mut()[i] = buffer[i];
-//                         }
-//         // self.led.clear();
-//                         // self.buffer.replace(buffer);
-//                         self.uart.receive_automatic(buffer, 250);
-//                         self.flash.write_page(384, page);
-//                     });
-//                 }
-//             }
-
-//         }
     }
 }
 
@@ -417,9 +338,6 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 
                 self.state.set(state::Idle);
                 self.buffer.take().map(move |buffer| {
-    if index == 3 {
-            self.led.clear();
-        }
                     buffer[0] = ESCAPE_CHAR;
                     buffer[1] = RES_GET_ATTR;
                     let mut j = 2;
@@ -439,11 +357,13 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                 });
             }
 
+            // We need to update the page we just read with the new attribute,
+            // and then write that all back to flash.
             state::SetAttribute{index} => {
                 self.buffer.map(move |buffer| {
                     // Copy the first 64 bytes of the buffer into the correct
                     // spot in the page.
-                    let start_index = (((index as usize)%8)*64);
+                    let start_index = ((index as usize)%8)*64;
                     for i in 0..64 {
                         pagebuffer.as_mut()[start_index + i] = buffer[i];
                     }
@@ -451,6 +371,7 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                 });
             }
 
+            // Pass what we have read so far to the client.
             state::ReadRange{address, length, remaining_length} => {
                 // Take what we need to read out of this page and send it
                 // on uart. If this is the first message be sure to send the
@@ -472,9 +393,6 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                     let copy_len = cmp::min(len, buffer.len()-index);
 
                     // Copy what we read from the page buffer to the user buffer.
-                    // for i in 0..copy_len {
-                    //     buffer[index + i] =
-                    // }
                     // Keep track of how much was actually copied.
                     let mut actually_copied = 0;
                     for i in 0..copy_len {
@@ -495,8 +413,6 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                         }
                         buffer[index] = b;
                         index += 1;
-
-
                     }
 
                     // Update our state.
@@ -507,13 +423,6 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                     // And send the buffer to the client.
                     self.page_buffer.replace(pagebuffer);
                     self.uart.transmit(buffer, index);
-
-                    // // Do the write.
-                    // self.buffer.replace(buffer);
-                    // self.remaining_length.set(self.remaining_length.get() - len);
-                    // self.address.set(self.address.get() + len);
-                    // self.buffer_index.set(buffer_index + len);
-                    // self.driver.write_page(page_number, pagebuffer);
                 });
             }
 
@@ -526,11 +435,12 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
     }
 
     fn write_complete(&self, pagebuffer: &'static mut F::Page, _error: hil::flash::Error) {
-// self.led.toggle();
         self.page_buffer.replace(pagebuffer);
 
         match self.state.get() {
-            state::SetAttribute{index} => {
+
+            // Attribute writing done, send an OK response.
+            state::SetAttribute{index: _} => {
                 self.state.set(state::Idle);
                 self.buffer.take().map(move |buffer| {
                     buffer[0] = ESCAPE_CHAR;
@@ -548,5 +458,25 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
         }
     }
 
-    fn erase_complete(&self, _error: hil::flash::Error) {}
+    fn erase_complete(&self, _error: hil::flash::Error) {
+        match self.state.get() {
+
+            // Page erased, return OK
+            state::ErasePage => {
+                self.state.set(state::Idle);
+                self.buffer.take().map(move |buffer| {
+                    buffer[0] = ESCAPE_CHAR;
+                    buffer[1] = RES_OK;
+                    self.uart.transmit(buffer, 2);
+                });
+            }
+
+            _ => {
+                self.buffer.take().map(|buffer| {
+                    self.uart.receive_automatic(buffer, 250);
+                });
+
+            }
+        }
+    }
 }
