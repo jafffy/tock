@@ -19,6 +19,7 @@ const ESCAPE_CHAR: u8 = 0xFC;
 const CMD_PING: u8 = 0x01;
 
 const RES_PONG: u8 = 0x11;
+const RES_OK: u8 = 0x15;
 const RES_READ_RANGE: u8 = 0x20;
 const RES_GET_ATTR: u8 = 0x22;
 
@@ -26,6 +27,7 @@ const RES_GET_ATTR: u8 = 0x22;
 enum state {
     Idle,
     GetAttribute{index: u8},
+    SetAttribute{index: u8},
     ReadRange{address: u32, length: u16, remaining_length: u16},
 }
 
@@ -166,7 +168,6 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
 
             match self.state.get() {
                 state::ReadRange{address, length, remaining_length} => {
-    self.led.clear();
                     // We have sent some of the read range to the client.
                     // We are either done, or need to setup the next read.
                     if remaining_length == 0 {
@@ -284,6 +285,32 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                     });
                     break;
                 }
+                Ok(Some(tockloader_proto::Command::SetAttr{index, key, value})) => {
+                    self.state.set(state::SetAttribute{index});
+
+                    // Copy the key and value into the buffer so it can be added
+                    // to the page buffer when needed.
+                    for i in 0..8 {
+                        buffer[i] = key[i];
+                    }
+                    buffer[8] = value.len() as u8;
+                    for i in 0..55 {
+                        // Copy in the value, otherwise clear to zero.
+                        if i < value.len() {
+                            buffer[9 + i] = value[i];
+                        } else {
+                            buffer[9+i] = 0;
+                        }
+                    }
+                    self.buffer.replace(buffer);
+
+                    // Initiate things by reading the correct flash page that
+                    // needs to be updated.
+                    self.page_buffer.take().map(move |page| {
+                        self.flash.read_page(3 + (index as usize / 8), page);
+                    });
+                    break;
+                }
                 Ok(Some(_)) => {
                     self.send_response(tockloader_proto::Response::Unknown);
                     // Some(tockloader_proto::Response::Unknown)
@@ -387,8 +414,12 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
             // We just read the correct page for this attribute. Copy it to
             // the out buffer and send it back to the client.
             state::GetAttribute{index} => {
+
                 self.state.set(state::Idle);
                 self.buffer.take().map(move |buffer| {
+    if index == 3 {
+            self.led.clear();
+        }
                     buffer[0] = ESCAPE_CHAR;
                     buffer[1] = RES_GET_ATTR;
                     let mut j = 2;
@@ -404,7 +435,19 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
                     }
 
                     self.page_buffer.replace(pagebuffer);
-                    self.uart.transmit(buffer, 66);
+                    self.uart.transmit(buffer, j);
+                });
+            }
+
+            state::SetAttribute{index} => {
+                self.buffer.map(move |buffer| {
+                    // Copy the first 64 bytes of the buffer into the correct
+                    // spot in the page.
+                    let start_index = (((index as usize)%8)*64);
+                    for i in 0..64 {
+                        pagebuffer.as_mut()[start_index + i] = buffer[i];
+                    }
+                    self.flash.write_page(3 + (index as usize / 8), pagebuffer);
                 });
             }
 
@@ -485,6 +528,24 @@ impl<'a, U: hil::uart::UARTAdvanced + 'a, F: hil::flash::Flash + 'a, G: hil::gpi
     fn write_complete(&self, pagebuffer: &'static mut F::Page, _error: hil::flash::Error) {
 // self.led.toggle();
         self.page_buffer.replace(pagebuffer);
+
+        match self.state.get() {
+            state::SetAttribute{index} => {
+                self.state.set(state::Idle);
+                self.buffer.take().map(move |buffer| {
+                    buffer[0] = ESCAPE_CHAR;
+                    buffer[1] = RES_OK;
+                    self.uart.transmit(buffer, 2);
+                });
+            }
+
+            _ => {
+                self.buffer.take().map(|buffer| {
+                    self.uart.receive_automatic(buffer, 250);
+                });
+
+            }
+        }
     }
 
     fn erase_complete(&self, _error: hil::flash::Error) {}
