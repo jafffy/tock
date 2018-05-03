@@ -12,7 +12,6 @@ use kernel::ReturnCode;
 use kernel::hil;
 // local modules
 use pm;
-use gpio;
 
 // Register map for SAM4L USART
 #[repr(C)]
